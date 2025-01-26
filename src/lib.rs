@@ -26,6 +26,8 @@ enum Token<'a> {
     ParensOpen,
     #[token(")")]
     ParensClose,
+    #[token(":")]
+    Colon,
 }
 
 const TYPE_CONVERSION: LazyLock<HashMap<&str, &str>> = LazyLock::new(|| {
@@ -67,47 +69,55 @@ struct SlangStruct<'a> {
 
 type PeekableLexer<'a> = Peekable<logos::Lexer<'a, Token<'a>>>;
 
-fn parse_struct<'a>(lexer: &mut PeekableLexer<'a>) -> SlangStruct<'a> {
-    assert_eq!(lexer.next().unwrap().unwrap(), Token::Struct);
+fn parse_struct<'a>(lexer: &mut PeekableLexer<'a>) -> Result<SlangStruct<'a>, ()> {
+    assert_eq!(lexer.next().unwrap()?, Token::Struct);
 
     let mut fields = Vec::new();
 
-    let name = match lexer.next().unwrap().unwrap() {
+    let name = match lexer.next().unwrap()? {
         Token::Ident(ident) => ident,
-        _ => panic!(),
+        other => panic!("{:?}", other),
     };
-    dbg!("struct {:?}", name);
 
-    assert_eq!(lexer.next().unwrap().unwrap(), Token::BraceOpen);
+    match lexer.next().unwrap()? {
+        Token::BraceOpen => {}
+        Token::Colon => {
+            // skip inheritance
+            while let Some(token) = lexer.next() {
+                if token == Ok(Token::BraceOpen) {
+                    break;
+                }
+            }
+        }
+        other => panic!("{:?}", other),
+    }
 
     while let Some(token) = lexer.next() {
-        match token.unwrap() {
+        match token? {
             Token::Ident(ty) => {
                 let is_pointer = match lexer.peek() {
                     Some(Ok(Token::Pointer)) => {
-                        let _ = lexer.next().unwrap().unwrap();
+                        let _ = lexer.next().unwrap()?;
                         true
                     }
                     _ => false,
                 };
-                let name = match lexer.next().unwrap().unwrap() {
+                let name = match lexer.next().unwrap()? {
                     Token::Ident(ident) => ident,
-                    _ => panic!(),
+                    other => panic!("{:?}", other),
                 };
-                dbg!((ty, is_pointer, name));
 
                 match lexer.next().unwrap().unwrap() {
                     Token::Semicolon => {
                         fields.push((ty, is_pointer, name));
                     }
                     Token::ParensOpen => {
-                        dbg!("function");
                         while let Some(token) = lexer.next() {
                             if token == Ok(Token::ParensClose) {
                                 break;
                             }
                         }
-                        assert_eq!(lexer.next().unwrap().unwrap(), Token::BraceOpen);
+                        assert_eq!(lexer.next().unwrap()?, Token::BraceOpen);
                         while let Some(token) = lexer.next() {
                             if token == Ok(Token::BraceClose) {
                                 break;
@@ -130,7 +140,7 @@ fn parse_struct<'a>(lexer: &mut PeekableLexer<'a>) -> SlangStruct<'a> {
         }
     }
 
-    SlangStruct { name, fields }
+    Ok(SlangStruct { name, fields })
 }
 
 #[proc_macro]
@@ -142,18 +152,9 @@ pub fn slang_struct(input: TokenStream) -> TokenStream {
     let mut ret = proc_macro2::TokenStream::new();
 
     while let Some(token) = lexer.peek() {
-        let token = match token {
-            Ok(token) => token,
-            Err(_) => {
-                let _ = lexer.next().unwrap();
-                continue;
-            }
-        };
-
-        dbg!(token);
         match token {
-            Token::Struct => {
-                let slang_struct = parse_struct(&mut lexer);
+            Ok(Token::Struct) => {
+                let slang_struct = parse_struct(&mut lexer).unwrap();
 
                 let name = Ident::new(&slang_struct.name, proc_macro2::Span::call_site());
 
@@ -196,7 +197,9 @@ pub fn slang_struct(input: TokenStream) -> TokenStream {
                     }
                 });
             }
-            _ => panic!(),
+            _ => {
+                let _ = lexer.next().unwrap();
+            }
         }
     }
 
