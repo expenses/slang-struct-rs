@@ -1,10 +1,32 @@
-use std::{collections::HashMap, sync::LazyLock};
+use std::{collections::HashMap, iter::Peekable, sync::LazyLock};
 
-use proc_macro2::Ident;
+use logos::Logos;
+
 use proc_macro::TokenStream;
-use quote::{quote, ToTokens};
-use regex::Regex;
-use syn::{braced, parse::{Parse, ParseStream}, parse_macro_input, punctuated::Punctuated, token::Brace, LitStr, Token, Type};
+use proc_macro2::Ident;
+use quote::quote;
+use syn::{parse_macro_input, LitStr, Type};
+
+#[derive(logos::Logos, Debug, PartialEq, Clone, Copy)]
+#[logos(skip r"[ \t\n\f]+")]
+enum Token<'a> {
+    #[token("struct")]
+    Struct,
+    #[token("{")]
+    BraceOpen,
+    #[token("}")]
+    BraceClose,
+    #[token(";")]
+    Semicolon,
+    #[regex("[a-zA-Z_0-9]+")]
+    Ident(&'a str),
+    #[token("*")]
+    Pointer,
+    #[token("(")]
+    ParensOpen,
+    #[token(")")]
+    ParensClose,
+}
 
 const TYPE_CONVERSION: LazyLock<HashMap<&str, &str>> = LazyLock::new(|| {
     HashMap::from([
@@ -19,7 +41,6 @@ const TYPE_CONVERSION: LazyLock<HashMap<&str, &str>> = LazyLock::new(|| {
         ("int64_t", "i64"),
         ("uint64_t", "u64"),
         ("float", "f32"),
-
         #[cfg(not(feature = "glam"))]
         ("float2", "[f32; 2]"),
         #[cfg(not(feature = "glam"))]
@@ -28,7 +49,6 @@ const TYPE_CONVERSION: LazyLock<HashMap<&str, &str>> = LazyLock::new(|| {
         ("float4", "[f32; 4]"),
         #[cfg(not(feature = "glam"))]
         ("float4x4", "[f32; 16]"),
-
         #[cfg(feature = "glam")]
         ("float2", "glam::Vec2"),
         #[cfg(feature = "glam")]
@@ -40,103 +60,144 @@ const TYPE_CONVERSION: LazyLock<HashMap<&str, &str>> = LazyLock::new(|| {
     ])
 });
 
-struct SlangStructArray {
-    slang_structs: Vec<SlangStruct>
+struct SlangStruct<'a> {
+    name: &'a str,
+    fields: Vec<(&'a str, bool, &'a str)>,
 }
 
-struct SlangStruct {
-    _struct_token: Token![struct],
-    name: Ident,
-    _brace_token: Brace,
-    fields: Punctuated<Field, Token![;]>
-}
+type PeekableLexer<'a> = Peekable<logos::Lexer<'a, Token<'a>>>;
 
-struct Field {
-    ty: Type,
-    name: Ident
-}
+fn parse_struct<'a>(lexer: &mut PeekableLexer<'a>) -> SlangStruct<'a> {
+    assert_eq!(lexer.next().unwrap().unwrap(), Token::Struct);
 
-impl Parse for SlangStructArray {
-    fn parse(input: ParseStream) -> syn::Result<Self> {
-        let mut slang_structs = Vec::<SlangStruct>::new();
-        while input.peek(Token![struct])  {
-            slang_structs.push(input.parse()?);
-        }
+    let mut fields = Vec::new();
 
-        Ok(SlangStructArray { slang_structs })
-    }
-}
+    let name = match lexer.next().unwrap().unwrap() {
+        Token::Ident(ident) => ident,
+        _ => panic!(),
+    };
+    dbg!("struct {:?}", name);
 
-impl Parse for SlangStruct {
-    fn parse(input: ParseStream) -> syn::Result<Self> {
-        let content;
-        Ok(SlangStruct {
-            _struct_token: input.parse()?,
-            name: input.parse()?,
-            _brace_token: braced!(content in input),
-            fields: content.parse_terminated(Field::parse, Token![;])?
-        })
-    }
-}
+    assert_eq!(lexer.next().unwrap().unwrap(), Token::BraceOpen);
 
-impl Parse for Field {
-    fn parse(input: ParseStream) -> syn::Result<Self> {
-        let mut ty: Type = input.parse()?;
+    while let Some(token) = lexer.next() {
+        match token.unwrap() {
+            Token::Ident(ty) => {
+                let is_pointer = match lexer.peek() {
+                    Some(Ok(Token::Pointer)) => {
+                        let _ = lexer.next().unwrap().unwrap();
+                        true
+                    }
+                    _ => false,
+                };
+                let name = match lexer.next().unwrap().unwrap() {
+                    Token::Ident(ident) => ident,
+                    _ => panic!(),
+                };
+                dbg!((ty, is_pointer, name));
 
-        if input.parse::<Option<Token![*]>>()?.is_some() {
-            ty = syn::parse("u64".parse().unwrap()).unwrap()
-        } else {
-            let mut str = ty.to_token_stream().to_string();
-            for (key, value) in TYPE_CONVERSION.iter() {
-                let mut r = String::from("([^a-zA-Z0-9]|^)");
-                r.push_str(*key);
-                r.push_str("([^a-zA-Z0-9]|$)");
-
-                let regex = Regex::new(&r).unwrap();
-                str = regex.replace_all(&str, *value).to_string();
+                match lexer.next().unwrap().unwrap() {
+                    Token::Semicolon => {
+                        fields.push((ty, is_pointer, name));
+                    }
+                    Token::ParensOpen => {
+                        dbg!("function");
+                        while let Some(token) = lexer.next() {
+                            if token == Ok(Token::ParensClose) {
+                                break;
+                            }
+                        }
+                        assert_eq!(lexer.next().unwrap().unwrap(), Token::BraceOpen);
+                        while let Some(token) = lexer.next() {
+                            if token == Ok(Token::BraceClose) {
+                                break;
+                            }
+                        }
+                        if lexer.peek() == Some(&Ok(Token::Semicolon)) {
+                            let _ = lexer.next().unwrap();
+                        }
+                    }
+                    other => panic!("{:?}", other),
+                }
             }
-            
-            ty = syn::parse(str.parse().unwrap()).unwrap()
+            Token::BraceClose => {
+                if lexer.peek() == Some(&Ok(Token::Semicolon)) {
+                    let _ = lexer.next().unwrap();
+                }
+                break;
+            }
+            other => panic!("{:?}", other),
         }
-
-        Ok(Field {
-            ty,
-            name: input.parse()?
-        })
     }
+
+    SlangStruct { name, fields }
 }
 
 #[proc_macro]
 pub fn slang_struct(input: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(input as SlangStructArray);
-    let SlangStructArray {
-        slang_structs
-    } = input;
+    let string = &input.to_string();
+
+    let mut lexer = Token::lexer(string).peekable();
 
     let mut ret = proc_macro2::TokenStream::new();
-    for slang in slang_structs {
-        let SlangStruct {
-            _struct_token,
-            name,
-            _brace_token,
-            fields
-        } = slang;
 
-        let names: Vec<Ident> = fields.iter().clone().map(|field| field.name.clone()).collect();
-        let types: Vec<Type> = fields.iter().clone().map(|field| field.ty.clone()).collect();
-
-        ret.extend(quote!(#[repr(C)]));
-        ret.extend(if cfg!(feature = "bytemuck") {
-            quote!(#[derive(Clone, Copy, Default, bytemuck::Pod, bytemuck::Zeroable)])
-        } else {
-            quote!(#[derive(Clone, Copy, Default)])
-        });
-
-        ret.extend(quote! {
-            pub struct #name {
-                #(#names: #types),*
+    while let Some(token) = lexer.peek() {
+        let token = match token {
+            Ok(token) => token,
+            Err(_) => {
+                let _ = lexer.next().unwrap();
+                continue;
             }
-        });
+        };
+
+        dbg!(token);
+        match token {
+            Token::Struct => {
+                let slang_struct = parse_struct(&mut lexer);
+
+                let name = Ident::new(&slang_struct.name, proc_macro2::Span::call_site());
+
+                let names: Vec<Ident> = slang_struct
+                    .fields
+                    .iter()
+                    .clone()
+                    .map(|(_, _, name)| Ident::new(name, proc_macro2::Span::call_site()))
+                    .collect();
+                let types: Vec<Type> = slang_struct
+                    .fields
+                    .iter()
+                    .clone()
+                    .map(|(ty, is_pointer, _)| {
+                        syn::parse(
+                            {
+                                if *is_pointer {
+                                    "u64"
+                                } else {
+                                    TYPE_CONVERSION[ty]
+                                }
+                            }
+                            .parse()
+                            .unwrap(),
+                        )
+                        .unwrap()
+                    })
+                    .collect();
+
+                ret.extend(quote!(#[repr(C)]));
+                ret.extend(if cfg!(feature = "bytemuck") {
+                    quote!(#[derive(Clone, Copy, Default, bytemuck::Pod, bytemuck::Zeroable)])
+                } else {
+                    quote!(#[derive(Clone, Copy, Default)])
+                });
+
+                ret.extend(quote! {
+                    pub struct #name {
+                        #(#names: #types),*
+                    }
+                });
+            }
+            _ => panic!(),
+        }
     }
 
     ret.into()
