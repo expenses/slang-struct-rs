@@ -10,6 +10,8 @@ use syn::{parse_macro_input, LitStr, Type};
 #[derive(logos::Logos, Debug, PartialEq, Clone, Copy)]
 #[logos(skip r"[ \t\n\f]+")]
 enum Token<'a> {
+    #[token("public")]
+    Public,
     #[token("struct")]
     Struct,
     #[token("{")]
@@ -76,7 +78,7 @@ fn parse_struct<'a>(lexer: &mut PeekableLexer<'a>) -> Result<SlangStruct<'a>, ()
 
     let name = match lexer.next().unwrap()? {
         Token::Ident(ident) => ident,
-        other => panic!("{:?}", other),
+        other => panic!("Expected struct name: {:?}", other),
     };
 
     match lexer.next().unwrap()? {
@@ -89,11 +91,12 @@ fn parse_struct<'a>(lexer: &mut PeekableLexer<'a>) -> Result<SlangStruct<'a>, ()
                 }
             }
         }
-        other => panic!("{:?}", other),
+        other => panic!("Expected struct brace open: {:?}", other),
     }
 
     while let Some(token) = lexer.next() {
         match token? {
+            Token::Public => {}
             Token::Ident(ty) => {
                 let is_pointer = match lexer.peek() {
                     Some(Ok(Token::Pointer)) => {
@@ -104,7 +107,10 @@ fn parse_struct<'a>(lexer: &mut PeekableLexer<'a>) -> Result<SlangStruct<'a>, ()
                 };
                 let name = match lexer.next().unwrap()? {
                     Token::Ident(ident) => ident,
-                    other => panic!("{:?}", other),
+                    other => panic!(
+                        "Expected field name in {} ({:?}, {:?}, {}): {:?}",
+                        name, fields, ty, is_pointer, other
+                    ),
                 };
 
                 match lexer.next().unwrap().unwrap() {
@@ -118,16 +124,24 @@ fn parse_struct<'a>(lexer: &mut PeekableLexer<'a>) -> Result<SlangStruct<'a>, ()
                             }
                         }
                         assert_eq!(lexer.next().unwrap()?, Token::BraceOpen);
+                        let mut brace_level = 1;
                         while let Some(token) = lexer.next() {
-                            if token == Ok(Token::BraceClose) {
-                                break;
+                            match token {
+                                Ok(Token::BraceOpen) => brace_level += 1,
+                                Ok(Token::BraceClose) => {
+                                    brace_level -= 1;
+                                    if brace_level == 0 {
+                                        break;
+                                    }
+                                }
+                                _ => {}
                             }
                         }
                         if lexer.peek() == Some(&Ok(Token::Semicolon)) {
                             let _ = lexer.next().unwrap();
                         }
                     }
-                    other => panic!("{:?}", other),
+                    other => panic!("Unexpected symbol in field: {:?}", other),
                 }
             }
             Token::BraceClose => {
