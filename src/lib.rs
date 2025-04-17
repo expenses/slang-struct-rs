@@ -187,8 +187,10 @@ pub fn slang_struct(input: TokenStream) -> TokenStream {
                             {
                                 if *is_pointer {
                                     "u64"
+                                } else if let Some(ty) = TYPE_CONVERSION.get(ty) {
+                                    ty
                                 } else {
-                                    TYPE_CONVERSION[ty]
+                                    ty
                                 }
                             }
                             .parse()
