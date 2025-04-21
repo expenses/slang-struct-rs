@@ -1,4 +1,8 @@
-use std::{collections::HashMap, iter::Peekable, sync::LazyLock};
+use std::{
+    collections::{HashMap, HashSet},
+    iter::Peekable,
+    sync::LazyLock,
+};
 
 use logos::Logos;
 
@@ -14,6 +18,8 @@ enum Token<'a> {
     Public,
     #[token("struct")]
     Struct,
+    #[token("enum")]
+    Enum,
     #[token("{")]
     BraceOpen,
     #[token("}")]
@@ -45,6 +51,12 @@ const TYPE_CONVERSION: LazyLock<HashMap<&str, &str>> = LazyLock::new(|| {
         ("int64_t", "i64"),
         ("uint64_t", "u64"),
         ("float", "f32"),
+        ("uint2", "[u32; 2]"),
+        ("uint3", "[u32; 3]"),
+        ("uint4", "[u32; 4]"),
+        ("int2", "[i32; 2]"),
+        ("int3", "[i32; 3]"),
+        ("int4", "[i32; 4]"),
         #[cfg(not(feature = "glam"))]
         ("float2", "[f32; 2]"),
         #[cfg(not(feature = "glam"))]
@@ -165,58 +177,74 @@ pub fn slang_struct(input: TokenStream) -> TokenStream {
 
     let mut ret = proc_macro2::TokenStream::new();
 
+    let mut structs = Vec::new();
+    let mut enums = HashSet::new();
+
     while let Some(token) = lexer.peek() {
         match token {
             Ok(Token::Struct) => {
                 let slang_struct = parse_struct(&mut lexer).unwrap();
-
-                let name = Ident::new(&slang_struct.name, proc_macro2::Span::call_site());
-
-                let names: Vec<Ident> = slang_struct
-                    .fields
-                    .iter()
-                    .clone()
-                    .map(|(_, _, name)| Ident::new(name, proc_macro2::Span::call_site()))
-                    .collect();
-                let types: Vec<Type> = slang_struct
-                    .fields
-                    .iter()
-                    .clone()
-                    .map(|(ty, is_pointer, _)| {
-                        syn::parse(
-                            {
-                                if *is_pointer {
-                                    "u64"
-                                } else if let Some(ty) = TYPE_CONVERSION.get(ty) {
-                                    ty
-                                } else {
-                                    ty
-                                }
-                            }
-                            .parse()
-                            .unwrap(),
-                        )
-                        .unwrap()
-                    })
-                    .collect();
-
-                ret.extend(quote!(#[repr(C)]));
-                ret.extend(if cfg!(feature = "bytemuck") {
-                    quote!(#[derive(Clone, Copy, Default, bytemuck::Pod, bytemuck::Zeroable)])
-                } else {
-                    quote!(#[derive(Clone, Copy, Default)])
-                });
-
-                ret.extend(quote! {
-                    pub struct #name {
-                        #(#names: #types),*
-                    }
-                });
+                structs.push(slang_struct);
+            }
+            Ok(Token::Enum) => {
+                let _ = lexer.next().unwrap();
+                let name = match lexer.next().unwrap().unwrap() {
+                    Token::Ident(ident) => ident,
+                    other => panic!("Expected ident for enum, got: {:?}", other),
+                };
+                enums.insert(name);
             }
             _ => {
                 let _ = lexer.next().unwrap();
             }
         }
+    }
+
+    for slang_struct in structs {
+        let name = Ident::new(&slang_struct.name, proc_macro2::Span::call_site());
+
+        let names: Vec<Ident> = slang_struct
+            .fields
+            .iter()
+            .clone()
+            .map(|(_, _, name)| Ident::new(name, proc_macro2::Span::call_site()))
+            .collect();
+        let types: Vec<Type> = slang_struct
+            .fields
+            .iter()
+            .clone()
+            .map(|(ty, is_pointer, _)| {
+                syn::parse(
+                    {
+                        if *is_pointer {
+                            "u64"
+                        } else if enums.contains(ty) {
+                            "u32"
+                        } else if let Some(ty) = TYPE_CONVERSION.get(ty) {
+                            ty
+                        } else {
+                            ty
+                        }
+                    }
+                    .parse()
+                    .unwrap(),
+                )
+                .unwrap()
+            })
+            .collect();
+
+        ret.extend(quote!(#[repr(C)]));
+        ret.extend(if cfg!(feature = "bytemuck") {
+            quote!(#[derive(Clone, Copy, Default, bytemuck::Pod, bytemuck::Zeroable)])
+        } else {
+            quote!(#[derive(Clone, Copy, Default)])
+        });
+
+        ret.extend(quote! {
+            pub struct #name {
+                #(#names: #types),*
+            }
+        });
     }
 
     ret.into()
