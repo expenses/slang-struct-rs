@@ -51,18 +51,6 @@ const TYPE_CONVERSION: LazyLock<HashMap<&str, &str>> = LazyLock::new(|| {
         ("int64_t", "i64"),
         ("uint64_t", "u64"),
         ("float", "f32"),
-        ("uint2", "[u32; 2]"),
-        ("uint3", "[u32; 3]"),
-        ("uint4", "[u32; 4]"),
-        ("int2", "[i32; 2]"),
-        ("int3", "[i32; 3]"),
-        ("int4", "[i32; 4]"),
-        #[cfg(not(feature = "glam"))]
-        ("float2", "[f32; 2]"),
-        #[cfg(not(feature = "glam"))]
-        ("float3", "[f32; 3]"),
-        #[cfg(not(feature = "glam"))]
-        ("float4", "[f32; 4]"),
         #[cfg(not(feature = "glam"))]
         ("float4x4", "[f32; 16]"),
         #[cfg(feature = "glam")]
@@ -214,22 +202,31 @@ pub fn slang_struct(input: TokenStream) -> TokenStream {
             .iter()
             .clone()
             .map(|(ty, is_pointer, _)| {
-                syn::parse(
-                    {
-                        if *is_pointer {
-                            "u64"
-                        } else if enums.contains(ty) {
-                            "u32"
-                        } else if let Some(ty) = TYPE_CONVERSION.get(ty) {
-                            ty
-                        } else {
-                            ty
-                        }
+                let get_ty = || -> String {
+                    if *is_pointer {
+                        "u64".to_string()
+                    } else if enums.contains(ty) {
+                        "u32".to_string()
+                    } else if let Some(ty) = TYPE_CONVERSION.get(ty) {
+                        ty.to_string()
+                    } else if ty.ends_with(['2', '3', '4']) {
+                        let count = &ty[ty.len() - 1..];
+                        let ty = &ty[..ty.len() - 1];
+                        return format!(
+                            "[{}; {}]",
+                            if let Some(ty) = TYPE_CONVERSION.get(ty) {
+                                ty
+                            } else {
+                                ty
+                            },
+                            count
+                        );
+                    } else {
+                        ty.to_string()
                     }
-                    .parse()
-                    .unwrap(),
-                )
-                .unwrap()
+                };
+
+                syn::parse(get_ty().parse().unwrap()).unwrap()
             })
             .collect();
 
