@@ -20,6 +20,8 @@ enum Token<'a> {
     Struct,
     #[token("enum")]
     Enum,
+    #[token("property")]
+    Property,
     #[token("{")]
     BraceOpen,
     #[token("}")]
@@ -94,9 +96,44 @@ fn parse_struct<'a>(lexer: &mut PeekableLexer<'a>) -> Result<SlangStruct<'a>, ()
         other => panic!("Expected struct brace open: {:?}", other),
     }
 
+    let consume_inner_braces = |lexer: &mut PeekableLexer| {
+        let mut brace_level = 1;
+        while let Some(token) = lexer.next() {
+            match token {
+                Ok(Token::BraceOpen) => brace_level += 1,
+                Ok(Token::BraceClose) => {
+                    brace_level -= 1;
+                    if brace_level == 0 {
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+    };
+
+    let consume_optional_semicolons = |lexer: &mut PeekableLexer| {
+        while lexer.peek() == Some(&Ok(Token::Semicolon)) {
+            let _ = lexer.next().unwrap();
+        }
+    };
+
     while let Some(token) = lexer.next() {
         match token? {
             Token::Public => {}
+            Token::Property => {
+                let _ty = match lexer.next().unwrap()? {
+                    Token::Ident(ident) => ident,
+                    other => panic!("Expected property type, got {:?}", other),
+                };
+                let _name = match lexer.next().unwrap()? {
+                    Token::Ident(ident) => ident,
+                    other => panic!("Expected property name, got {:?}", other),
+                };
+                assert_eq!(lexer.next().unwrap()?, Token::BraceOpen);
+                consume_inner_braces(lexer);
+                consume_optional_semicolons(lexer);
+            }
             Token::Ident(ty) => {
                 let is_pointer = match lexer.peek() {
                     Some(Ok(Token::Pointer)) => {
@@ -124,30 +161,14 @@ fn parse_struct<'a>(lexer: &mut PeekableLexer<'a>) -> Result<SlangStruct<'a>, ()
                             }
                         }
                         assert_eq!(lexer.next().unwrap()?, Token::BraceOpen);
-                        let mut brace_level = 1;
-                        while let Some(token) = lexer.next() {
-                            match token {
-                                Ok(Token::BraceOpen) => brace_level += 1,
-                                Ok(Token::BraceClose) => {
-                                    brace_level -= 1;
-                                    if brace_level == 0 {
-                                        break;
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                        if lexer.peek() == Some(&Ok(Token::Semicolon)) {
-                            let _ = lexer.next().unwrap();
-                        }
+                        consume_inner_braces(lexer);
+                        consume_optional_semicolons(lexer);
                     }
                     other => panic!("Unexpected symbol in field: {:?}", other),
                 }
             }
             Token::BraceClose => {
-                if lexer.peek() == Some(&Ok(Token::Semicolon)) {
-                    let _ = lexer.next().unwrap();
-                }
+                consume_optional_semicolons(lexer);
                 break;
             }
             other => panic!("{:?}", other),
@@ -211,16 +232,13 @@ pub fn slang_struct(input: TokenStream) -> TokenStream {
                         ty.to_string()
                     } else if ty.ends_with(['2', '3', '4']) {
                         let count = &ty[ty.len() - 1..];
-                        let ty = &ty[..ty.len() - 1];
-                        return format!(
-                            "[{}; {}]",
-                            if let Some(ty) = TYPE_CONVERSION.get(ty) {
-                                ty
-                            } else {
-                                ty
-                            },
-                            count
-                        );
+                        let prefix = &ty[..ty.len() - 1];
+                        return if let Some(ty) = TYPE_CONVERSION.get(prefix) {
+                            format!("[{}; {}]", ty, count)
+                        } else {
+                            // return original.
+                            ty.to_string()
+                        };
                     } else {
                         ty.to_string()
                     }
