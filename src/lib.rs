@@ -38,6 +38,10 @@ enum Token<'a> {
     ParensClose,
     #[token(":")]
     Colon,
+    #[token("<")]
+    OpenGeneric,
+    #[token(">")]
+    CloseGeneric,
 }
 
 const TYPE_CONVERSION: LazyLock<HashMap<&str, &str>> = LazyLock::new(|| {
@@ -74,16 +78,16 @@ struct SlangStruct<'a> {
 type PeekableLexer<'a> = Peekable<logos::Lexer<'a, Token<'a>>>;
 
 fn parse_struct<'a>(lexer: &mut PeekableLexer<'a>) -> Result<SlangStruct<'a>, ()> {
-    assert_eq!(lexer.next().unwrap()?, Token::Struct);
+    assert_eq!(lexer.next().expect("struct")?, Token::Struct);
 
     let mut fields = Vec::new();
 
-    let name = match lexer.next().unwrap()? {
+    let name = match lexer.next().expect("struct name")? {
         Token::Ident(ident) => ident,
         other => panic!("Expected struct name: {:?}", other),
     };
 
-    match lexer.next().unwrap()? {
+    match lexer.next().expect("struct next")? {
         Token::BraceOpen => {}
         Token::Colon => {
             // skip inheritance
@@ -114,7 +118,7 @@ fn parse_struct<'a>(lexer: &mut PeekableLexer<'a>) -> Result<SlangStruct<'a>, ()
 
     let consume_optional_semicolons = |lexer: &mut PeekableLexer| {
         while lexer.peek() == Some(&Ok(Token::Semicolon)) {
-            let _ = lexer.next().unwrap();
+            let _ = lexer.next().expect("consume optional semicolons");
         }
     };
 
@@ -122,19 +126,32 @@ fn parse_struct<'a>(lexer: &mut PeekableLexer<'a>) -> Result<SlangStruct<'a>, ()
         match token? {
             Token::Public => {}
             Token::Property => {
-                let _ty = match lexer.next().unwrap()? {
+                let _ty = match lexer.next().expect("property ty")? {
                     Token::Ident(ident) => ident,
                     other => panic!("Expected property type, got {:?}", other),
                 };
-                let _name = match lexer.next().unwrap()? {
+                let _name = match lexer.next().expect("property name")? {
                     Token::Ident(ident) => ident,
                     other => panic!("Expected property name, got {:?}", other),
                 };
-                assert_eq!(lexer.next().unwrap()?, Token::BraceOpen);
+                assert_eq!(
+                    lexer.next().expect("property brace open")?,
+                    Token::BraceOpen
+                );
                 consume_inner_braces(lexer);
                 consume_optional_semicolons(lexer);
             }
             Token::Ident(ty) => {
+                if let Some(Ok(Token::OpenGeneric)) = lexer.peek() {
+                    let _ = lexer.next().unwrap()?;
+                    assert!(matches!(lexer.next(), Some(Ok(Token::Ident(_)))));
+                    while lexer.peek() == Some(&Ok(Token::Semicolon)) {
+                        let _ = lexer.next().expect("consume optional semicolons");
+                        assert!(matches!(lexer.next(), Some(Ok(Token::Ident(_)))));
+                    }
+                    assert!(matches!(lexer.next(), Some(Ok(Token::CloseGeneric))));
+                }
+
                 let is_pointer = match lexer.peek() {
                     Some(Ok(Token::Pointer)) => {
                         let _ = lexer.next().unwrap()?;
@@ -142,7 +159,7 @@ fn parse_struct<'a>(lexer: &mut PeekableLexer<'a>) -> Result<SlangStruct<'a>, ()
                     }
                     _ => false,
                 };
-                let name = match lexer.next().unwrap()? {
+                let name = match lexer.next().expect("ident name")? {
                     Token::Ident(ident) => ident,
                     other => panic!(
                         "Expected field name in {} ({:?}, {:?}, {}): {:?}",
@@ -150,7 +167,7 @@ fn parse_struct<'a>(lexer: &mut PeekableLexer<'a>) -> Result<SlangStruct<'a>, ()
                     ),
                 };
 
-                match lexer.next().unwrap().unwrap() {
+                match lexer.next().expect("ident next").expect("ident next next") {
                     Token::Semicolon => {
                         fields.push((ty, is_pointer, name));
                     }
@@ -160,7 +177,7 @@ fn parse_struct<'a>(lexer: &mut PeekableLexer<'a>) -> Result<SlangStruct<'a>, ()
                                 break;
                             }
                         }
-                        assert_eq!(lexer.next().unwrap()?, Token::BraceOpen);
+                        assert_eq!(lexer.next().expect("parens open")?, Token::BraceOpen);
                         consume_inner_braces(lexer);
                         consume_optional_semicolons(lexer);
                     }
@@ -192,19 +209,19 @@ pub fn slang_struct(input: TokenStream) -> TokenStream {
     while let Some(token) = lexer.peek() {
         match token {
             Ok(Token::Struct) => {
-                let slang_struct = parse_struct(&mut lexer).unwrap();
+                let slang_struct = parse_struct(&mut lexer).expect("slang struct");
                 structs.push(slang_struct);
             }
             Ok(Token::Enum) => {
-                let _ = lexer.next().unwrap();
-                let name = match lexer.next().unwrap().unwrap() {
+                let _ = lexer.next().expect("enum");
+                let name = match lexer.next().expect("enum name").expect("enum name inner") {
                     Token::Ident(ident) => ident,
                     other => panic!("Expected ident for enum, got: {:?}", other),
                 };
                 enums.insert(name);
             }
             _ => {
-                let _ = lexer.next().unwrap();
+                let _ = lexer.next().expect("enum other");
             }
         }
     }
