@@ -42,6 +42,10 @@ enum Token<'a> {
     OpenGeneric,
     #[token(">")]
     CloseGeneric,
+    #[token("[")]
+    OpenArray,
+    #[token("]")]
+    CloseArray,
 }
 
 const TYPE_CONVERSION: LazyLock<HashMap<&str, &str>> = LazyLock::new(|| {
@@ -150,6 +154,11 @@ fn parse_struct<'a>(lexer: &mut PeekableLexer<'a>) -> Result<SlangStruct<'a>, ()
                         assert!(matches!(lexer.next(), Some(Ok(Token::Ident(_)))));
                     }
                     assert!(matches!(lexer.next(), Some(Ok(Token::CloseGeneric))));
+                }
+                if let Some(Ok(Token::OpenArray)) = lexer.peek() {
+                    let _ = lexer.next().unwrap()?;
+                    assert!(matches!(lexer.next(), Some(Ok(Token::Ident(_)))));
+                    assert!(matches!(lexer.next(), Some(Ok(Token::CloseArray))));
                 }
 
                 let is_pointer = match lexer.peek() {
