@@ -146,6 +146,19 @@ fn parse_struct<'a>(lexer: &mut PeekableLexer<'a>) -> Result<SlangStruct<'a>, ()
                 consume_optional_semicolons(lexer);
             }
             Token::Ident(ty) => {
+                if ty == "__init" {
+                    while let Some(token) = lexer.next() {
+                        if token == Ok(Token::ParensClose) {
+                            break;
+                        }
+                    }
+                    assert_eq!(
+                        lexer.next().expect("property brace open")?,
+                        Token::BraceOpen
+                    );
+                    consume_inner_braces(lexer);
+                    continue;
+                }
                 if let Some(Ok(Token::OpenGeneric)) = lexer.peek() {
                     let _ = lexer.next().unwrap()?;
                     assert!(matches!(lexer.next(), Some(Ok(Token::Ident(_)))));
