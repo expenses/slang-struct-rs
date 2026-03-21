@@ -159,6 +159,13 @@ fn parse_struct<'a>(lexer: &mut PeekableLexer<'a>) -> Result<SlangStruct<'a>, ()
                     consume_inner_braces(lexer);
                     continue;
                 }
+
+                while let Some(Ok(Token::Colon)) = lexer.peek() {
+                    let _ = lexer.next().unwrap()?;
+                    assert!(matches!(lexer.next(), Some(Ok(Token::Colon))));
+                    assert!(matches!(lexer.next(), Some(Ok(Token::Ident(_)))));
+                }
+
                 if let Some(Ok(Token::OpenGeneric)) = lexer.peek() {
                     let _ = lexer.next().unwrap()?;
                     assert!(matches!(lexer.next(), Some(Ok(Token::Ident(_)))));
