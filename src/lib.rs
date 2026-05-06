@@ -217,6 +217,13 @@ fn parse_struct<'a>(lexer: &mut PeekableLexer<'a>) -> Result<SlangStruct<'a>, ()
                 consume_optional_semicolons(lexer);
                 break;
             }
+            Token::OpenArray => {
+                while let Some(token) = lexer.next() {
+                    if token == Ok(Token::CloseArray) {
+                        break;
+                    }
+                }
+            }
             other => panic!("{:?}", other),
         }
     }
