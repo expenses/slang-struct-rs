@@ -74,9 +74,17 @@ const TYPE_CONVERSION: LazyLock<HashMap<&str, &str>> = LazyLock::new(|| {
     ])
 });
 
+#[derive(Debug)]
+struct Field<'a> {
+    ty: &'a str,
+    is_pointer: bool,
+    name: &'a str,
+    array_len: Option<u32>,
+}
+
 struct SlangStruct<'a> {
     name: &'a str,
-    fields: Vec<(&'a str, bool, &'a str)>,
+    fields: Vec<Field<'a>>,
 }
 
 type PeekableLexer<'a> = Peekable<logos::Lexer<'a, Token<'a>>>;
@@ -196,9 +204,27 @@ fn parse_struct<'a>(lexer: &mut PeekableLexer<'a>) -> Result<SlangStruct<'a>, ()
                     ),
                 };
 
+                let mut field = Field {
+                    name,
+                    is_pointer,
+                    ty,
+                    array_len: None,
+                };
+
+                if let Some(Ok(Token::OpenArray)) = lexer.peek() {
+                    let _ = lexer.next();
+                    match lexer.next().unwrap().unwrap() {
+                        Token::Ident(ident) => {
+                            field.array_len = Some(ident.parse().unwrap());
+                        }
+                        _ => panic!("Expected array length ident"),
+                    }
+                    assert!(matches!(lexer.next(), Some(Ok(Token::CloseArray))));
+                }
+
                 match lexer.next().expect("ident next").expect("ident next next") {
                     Token::Semicolon => {
-                        fields.push((ty, is_pointer, name));
+                        fields.push(field);
                     }
                     Token::ParensOpen => {
                         while let Some(token) = lexer.next() {
@@ -269,36 +295,49 @@ pub fn slang_struct(input: TokenStream) -> TokenStream {
             .fields
             .iter()
             .clone()
-            .map(|(_, _, name)| Ident::new(name, proc_macro2::Span::call_site()))
+            .map(|field| Ident::new(field.name, proc_macro2::Span::call_site()))
             .collect();
         let types: Vec<Type> = slang_struct
             .fields
             .iter()
             .clone()
-            .map(|(ty, is_pointer, _)| {
-                let get_ty = || -> String {
-                    if *is_pointer {
-                        "u64".to_string()
-                    } else if enums.contains(ty) {
-                        "u32".to_string()
-                    } else if let Some(ty) = TYPE_CONVERSION.get(ty) {
-                        ty.to_string()
-                    } else if ty.ends_with(['2', '3', '4']) {
-                        let count = &ty[ty.len() - 1..];
-                        let prefix = &ty[..ty.len() - 1];
-                        return if let Some(ty) = TYPE_CONVERSION.get(prefix) {
-                            format!("[{}; {}]", ty, count)
+            .map(
+                |Field {
+                     ty,
+                     is_pointer,
+                     array_len,
+                     ..
+                 }| {
+                    let get_ty = || -> String {
+                        let mut string = if *is_pointer {
+                            "u64".to_string()
+                        } else if enums.contains(ty) {
+                            "u32".to_string()
+                        } else if let Some(ty) = TYPE_CONVERSION.get(ty) {
+                            ty.to_string()
+                        } else if ty.ends_with(['2', '3', '4']) {
+                            let count = &ty[ty.len() - 1..];
+                            let prefix = &ty[..ty.len() - 1];
+                            return if let Some(ty) = TYPE_CONVERSION.get(prefix) {
+                                format!("[{}; {}]", ty, count)
+                            } else {
+                                // return original.
+                                ty.to_string()
+                            };
                         } else {
-                            // return original.
                             ty.to_string()
                         };
-                    } else {
-                        ty.to_string()
-                    }
-                };
 
-                syn::parse(get_ty().parse().unwrap()).unwrap()
-            })
+                        if let Some(array_len) = array_len {
+                            string = format!("[{}; {}]", string, array_len);
+                        }
+
+                        string
+                    };
+
+                    syn::parse(get_ty().parse().unwrap()).unwrap()
+                },
+            )
             .collect();
 
         ret.extend(quote!(#[repr(C)]));
