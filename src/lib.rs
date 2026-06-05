@@ -142,6 +142,11 @@ fn parse_struct<'a>(lexer: &mut PeekableLexer<'a>) -> Result<SlangStruct<'a>, ()
                     Token::Ident(ident) => ident,
                     other => panic!("Expected property type, got {:?}", other),
                 };
+                if let Some(Ok(Token::OpenGeneric)) = lexer.peek() {
+                    let _ = lexer.next().unwrap()?;
+                    assert!(matches!(lexer.next(), Some(Ok(Token::Ident(_)))));
+                    assert!(matches!(lexer.next(), Some(Ok(Token::CloseGeneric))));
+                }
                 let _name = match lexer.next().expect("property name")? {
                     Token::Ident(ident) => ident,
                     other => panic!("Expected property name, got {:?}", other),
